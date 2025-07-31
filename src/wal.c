@@ -808,6 +808,9 @@ struct Wal {
 #ifdef SQLITE_ENABLE_SETLK_TIMEOUT
   sqlite3 *db;
 #endif
+  void (*walSwitchCB)(void*, int, unsigned int);
+  void* callbackData;
+
 };
 
 /*
@@ -3114,8 +3117,9 @@ int sqlite3WalClose(
       if( pWal->exclusiveMode==WAL_NORMAL_MODE ){
         pWal->exclusiveMode = WAL_EXCLUSIVE_MODE;
       }
+#ifdef SQLITE_ENABLE_CHECKPOINT_ON_CLOSE
       for(i=0; rc==SQLITE_OK && i<2; i++){
-        rc = sqlite3WalCheckpoint(pWal, db, 
+        rc = sqlite3WalCheckpoint(pWal, db,
             SQLITE_CHECKPOINT_PASSIVE, 0, 0, sync_flags, nBuf, zBuf, 0, 0
         );
         if( rc==SQLITE_OK ){
@@ -3147,9 +3151,10 @@ int sqlite3WalClose(
           pWal->writeLock = 1;
           walIndexWriteHdr(pWal);
           pWal->writeLock = 0;
-        } 
+        }
         SEH_EXCEPT( rc = SQLITE_IOERR_IN_PAGE; )
       }
+#endif /* SQLITE_ENABLE_CHECKPOINT_ON_CLOSE */
     }
 
     walIndexClose(pWal, isDelete);
@@ -4596,8 +4601,9 @@ static int walRestartLog(Wal *pWal){
         / (pWal->szPage+WAL_FRAME_HDRSIZE);
       nWalSize = MAX(nWalSize, 1);
     }
+    u32 currentWALMaxFrame = walidxGetMxFrame(&pWal->hdr, iApp);
 
-    if( walidxGetMxFrame(&pWal->hdr, iApp)>=nWalSize ){
+    if( currentWALMaxFrame>=nWalSize ){
       volatile WalCkptInfo *pInfo = walCkptInfo(pWal);
       u32 mxFrame = walidxGetMxFrame(&pWal->hdr, !iApp);
       if( mxFrame==0 || pInfo->nBackfill ){
@@ -4612,6 +4618,9 @@ static int walRestartLog(Wal *pWal){
           walIndexWriteHdr(pWal);
           pInfo->nBackfill = 0;
           wal2RestartFinished(pWal, iApp);
+          if (pWal->walSwitchCB != NULL) {
+            pWal->walSwitchCB(pWal->callbackData, iApp, currentWALMaxFrame);
+          }
           walUnlockShared(pWal, WAL_READ_LOCK(pWal->readLock));
           pWal->readLock = iNew ? WAL_LOCK_PART2_FULL1 : WAL_LOCK_PART1_FULL2;
           rc = walLockShared(pWal, WAL_READ_LOCK(pWal->readLock));
@@ -5450,6 +5459,14 @@ sqlite3_file *sqlite3WalFile(Wal *pWal){
 int sqlite3WalJournalMode(Wal *pWal){
   assert( pWal );
   return (isWalMode2(pWal) ? PAGER_JOURNALMODE_WAL2 : PAGER_JOURNALMODE_WAL);
+}
+
+int sqlite3WalSetSwitchCallback(Wal *pWal, void* callbackData, void (*walSwitchCB)(void*, int, unsigned int)) {
+    if (pWal) {
+      pWal->walSwitchCB = walSwitchCB;
+      pWal->callbackData = callbackData;
+    }
+    return SQLITE_OK;
 }
 
 #endif /* #ifndef SQLITE_OMIT_WAL */

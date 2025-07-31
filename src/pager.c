@@ -7676,6 +7676,11 @@ int sqlite3PagerCloseWal(Pager *pPager, sqlite3 *db){
   return rc;
 }
 
+int sqlite3PagerSetSwitchCallback(Pager* p, void* callbackData, void (*callback)(void*, int, unsigned int)) {
+  int rc = sqlite3WalSetSwitchCallback(p->pWal, callbackData, callback);
+  return rc;
+}
+
 #ifdef SQLITE_ENABLE_SETLK_TIMEOUT
 /*
 ** If pager pPager is a wal-mode database not in exclusive locking mode,
